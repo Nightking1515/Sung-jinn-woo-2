@@ -1,1 +1,18 @@
+# render.yaml
+services:
+  - type: web
+    name: solo-leveling-bot # Tumhari service ka naam (tum badal sakte ho)
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py" # Confirm karo ki tumhari main bot file ka naam 'bot.py' hai
+    envVars:
+      - key: BOT_TOKEN # Ye environment variable Render dashboard par set karna hoga
+        sync: false    # Render ke Secret File se sync karne ke liye 'true' ya manually input karne ke liye 'false'
+      - key: OWNER_ID  # Tumhare bot owner ka Telegram ID
+        value: "1077750796" # 'nightking1515' ka Telegram ID (confirm kar lena)
+      - key: DATABASE_PATH # Data file ka path, jo persistent disk par hoga
+        value: "/data/users.json" # Persistent disk ka mount path + file ka naam
+    disk:
+      name: bot-data # Persistent disk ka naam
+      mountPath: /data # Yehi woh folder hai jahan tumhari 'users.json' file save hogi
 
