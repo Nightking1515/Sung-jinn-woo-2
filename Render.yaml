@@ -3,7 +3,7 @@ services:
     name: solo-leveling-bot
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "pip install -r Requirements.txt"
     startCommand: "python main.py"
     envVars:
       - key: BOT_TOKEN
