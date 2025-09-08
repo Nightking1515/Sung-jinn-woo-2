@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import random
 from datetime import datetime
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
