@@ -1,960 +1,814 @@
-import logging
-import json
+# main.py
+"""
+Solo Leveling Telegram Bot - single-file implementation
+- Persistent JSON storage in 'users.json' (auto-created)
+- Embedded SHOP_ITEMS (50 items you provided)
+- Commands: /start, /profile, /status, /shop, /buy, /inventory, /pvp, /pvpbot, /wongive, /tophunters, /globleleader, /localleader, /help, /guide, /owner
+- Additional stubs: /bank, /myloan, /rank, /level, /swards, /revivalitem, /dailytask, /taskreward, /title
+Notes:
+- Ensure BOT_TOKEN is set in environment or .env file.
+- To run: pip install python-telegram-bot python-dotenv, then `python main.py`
+"""
+
 import os
-import random
-import asyncio
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+import json
+import uuid
+import logging
+from datetime import datetime, timedelta
+from functools import wraps
+from threading import Lock
+
+from dotenv import load_dotenv
+
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
+)
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    CallbackQueryHandler,
-    ConversationHandler,
-    MessageHandler,
-    filters,
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    ContextTypes, MessageHandler, filters
 )
 
-# --- Configuration & Setup ---
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ---------------------------
+# Configuration & Constants
+# ---------------------------
+load_dotenv()
+BOT_TOKEN = os.getenv("8050711631:AAEOmQtI1LDg8F5zBST1tIPh0mDtHbIISEs")
+OWNER_USERNAME = os.getenv("OWNER_USERNAME", "@Nightking1515")
+DATA_FILE = os.getenv("DATA_FILE", "users.json")
+# If you later want a separate shop file, change here. For now shop is embedded.
+# Persistent write lock
+_file_lock = Lock()
 
-# --- Replace with your actual credentials ---
-BOT_TOKEN = "8050711631:AAEOmQtI1LDg8F5zBST1tIPh0mDtHbIISEs"
-OWNER_ID = 6820913319
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN not set. Put it into environment or .env file (BOT_TOKEN=...)")
 
-# Data file path (will be in /data on Render for persistence)
-USER_DATA_FILE = os.getenv("DATABASE_PATH", "users.json")
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("solo-bot")
 
-# --- Global Data and Constants ---
-# User data structure
-users = {} # {tg_id: {"level": int, "rank": str, "xp": int, "won": int, "hp": int, "strength": int, "inventory": [], "wins": int, "losses": int, "pvp_points": int, "loan": int, "daily_tasks_done": int}}
-
-# PvP state management
-FIGHT_STATE = {} # {chat_id: {"fighter1": {"id": int, "hp": int, "name": str}, "fighter2": {"id": int, "hp": int, "name": str}, "message_id": int, "turn": int, "in_progress": bool, "is_bot_fight": bool, "is_special_battle": bool, "special_hunter": str}}
-
-# Rank system
-RANKS = ["E", "D", "C", "B", "A"] + [f"S{i}" for i in range(1, 101)] + [f"SJP{i}" for i in range(1, 101)]
-RANK_THRESHOLDS = {
-    "D": 100, "C": 250, "B": 500, "A": 1000, "S1": 2500, "S2": 3000, "S3": 3500, "S4": 4000, "S5": 4500, "S6": 5000, "S7": 5500, "S8": 6000, "S9": 6500, "S10": 7000, "S11": 7500, "S12": 8000, "S13": 8500, "S14": 9000, "S15": 9500, "S16": 10000, "S17": 10500, "S18": 11000, "S19": 11500, "S20": 12000, "S21": 12500, "S22": 13000, "S23": 13500, "S24": 14000, "S25": 14500, "S26": 15000, "S27": 15500, "S28": 16000, "S29": 16500, "S30": 17000, "S31": 17500, "S32": 18000, "S33": 18500, "S34": 19000, "S35": 19500, "S36": 20000, "S37": 20500, "S38": 21000, "S39": 21500, "S40": 22000, "S41": 22500, "S42": 23000, "S43": 23500, "S44": 24000, "S45": 24500, "S46": 25000, "S47": 25500, "S48": 26000, "S49": 26500, "S50": 27000, "S51": 27500, "S52": 28000, "S53": 28500, "S54": 29000, "S55": 29500, "S56": 30000, "S57": 30500, "S58": 31000, "S59": 31500, "S60": 32000, "S61": 32500, "S62": 33000, "S63": 33500, "S64": 34000, "S65": 34500, "S66": 35000, "S67": 35500, "S68": 36000, "S69": 36500, "S70": 37000, "S71": 37500, "S72": 38000, "S73": 38500, "S74": 39000, "S75": 39500, "S76": 40000, "S77": 40500, "S78": 41000, "S79": 41500, "S80": 42000, "S81": 42500, "S82": 43000, "S83": 43500, "S84": 44000, "S85": 44500, "S86": 45000, "S87": 45500, "S88": 46000, "S89": 46500, "S90": 47000, "S91": 47500, "S92": 48000, "S93": 48500, "S94": 49000, "S95": 49500, "S96": 50000, "S97": 50500, "S98": 51000, "S99": 51500, "S100": 52000, "SJP1": 100000, "SJP2": 110000, "SJP3": 120000, "SJP4": 130000, "SJP5": 140000, "SJP6": 150000, "SJP7": 160000, "SJP8": 170000, "SJP9": 180000, "SJP10": 190000, "SJP11": 200000, "SJP12": 210000, "SJP13": 220000, "SJP14": 230000, "SJP15": 240000, "SJP16": 250000, "SJP17": 260000, "SJP18": 270000, "SJP19": 280000, "SJP20": 290000, "SJP21": 300000, "SJP22": 310000, "SJP23": 320000, "SJP24": 330000, "SJP25": 340000, "SJP26": 350000, "SJP27": 360000, "SJP28": 370000, "SJP29": 380000, "SJP30": 390000, "SJP31": 400000, "SJP32": 410000, "SJP33": 420000, "SJP34": 430000, "SJP35": 440000, "SJP36": 450000, "SJP37": 460000, "SJP38": 470000, "SJP39": 480000, "SJP40": 490000, "SJP41": 500000, "SJP42": 510000, "SJP43": 520000, "SJP44": 530000, "SJP45": 540000, "SJP46": 550000, "SJP47": 560000, "SJP48": 570000, "SJP49": 580000, "SJP50": 590000, "SJP51": 600000, "SJP52": 610000, "SJP53": 620000, "SJP54": 630000, "SJP55": 640000, "SJP56": 650000, "SJP57": 660000, "SJP58": 670000, "SJP59": 680000, "SJP60": 690000, "SJP61": 700000, "SJP62": 710000, "SJP63": 720000, "SJP64": 730000, "SJP65": 740000, "SJP66": 750000, "SJP67": 760000, "SJP68": 770000, "SJP69": 780000, "SJP70": 790000, "SJP71": 800000, "SJP72": 810000, "SJP73": 820000, "SJP74": 830000, "SJP75": 840000, "SJP76": 850000, "SJP77": 860000, "SJP78": 870000, "SJP79": 880000, "SJP80": 890000, "SJP81": 900000, "SJP82": 910000, "SJP83": 920000, "SJP84": 930000, "SJP85": 940000, "SJP86": 950000, "SJP87": 960000, "SJP88": 970000, "SJP89": 980000, "SJP90": 990000, "SJP91": 1000000, "SJP92": 1010000, "SJP93": 1020000, "SJP94": 1030000, "SJP95": 1040000, "SJP96": 1050000, "SJP97": 1060000, "SJP98": 1070000, "SJP99": 1080000, "SJP100": 1090000
-}
-
-# XP needed for each level
-LEVEL_XP_THRESHOLDS = {i: i * 500 for i in range(1, 101)}
-
-# PvP Bot details for special battles
-BOT_HP = 100
-BOT_NAME = "EvilBot"
-SPECIAL_HUNTERS = {
-    20: "Thomas Andre", 40: "Liu Zhigang", 60: "Christopher Reed", 80: "Go Gun-Hee", 100: "Antares"
-}
-SPECIAL_SHADOWS = {
-    25: "Igris", 50: "Tusk", 75: "Bellion", 100: "Beru"
-}
-REWARDS = {
-    "pvp": {"xp": 100000, "won": 1000000, "pvp_points": 22},
-    "pvp_bot": {"xp": 10000, "won": 100000, "pvp_points": 5}
-}
-PENALTIES = {
-    "pvp": {"xp": 500, "won": 100000, "pvp_points": 26},
-    "pvp_bot": {"xp": 100, "won": 10000, "pvp_points": 3}
-}
-
-# The shop list you provided
+# ---------------------------
+# Embedded Shop Items (50)
+# ---------------------------
 SHOP_ITEMS = {
-    "swords": [
-        {"id": 1, "name": "Iron Sword", "price": 200, "damage": 10},
-        {"id": 2, "name": "Steel Sword", "price": 500, "damage": 20},
-        {"id": 3, "name": "Silver Sword", "price": 800, "damage": 30},
-        {"id": 4, "name": "Magic Sword", "price": 1500, "damage": 50},
-        {"id": 5, "name": "Flame Sword", "price": 2200, "damage": 70},
-        {"id": 6, "name": "Ice Sword", "price": 2500, "damage": 80},
-        {"id": 7, "name": "Thunder Sword", "price": 3000, "damage": 100},
-        {"id": 8, "name": "Dark Sword", "price": 4000, "damage": 120},
-        {"id": 9, "name": "Light Sword", "price": 4200, "damage": 125},
-        {"id": 10, "name": "Dragon Slayer", "price": 5000, "damage": 150},
-        {"id": 11, "name": "Shadow Blade", "price": 6000, "damage": 180},
-        {"id": 12, "name": "Heavenly Sword", "price": 7500, "damage": 200},
-        {"id": 13, "name": "Chaos Sword", "price": 10000, "damage": 250},
-        {"id": 14, "name": "Demonic Sword", "price": 12000, "damage": 300},
-        {"id": 15, "name": "Excalibur", "price": 15000, "damage": 400},
-    ],
-    "revival": [
-        {"id": 16, "name": "Revival Potion", "price": 500, "effect": "Revive with 20% HP"},
-        {"id": 17, "name": "Strong Revival Potion", "price": 1200, "effect": "Revive with 50% HP"},
-        {"id": 18, "name": "Phoenix Feather", "price": 2500, "effect": "Revive with 100% HP"},
-        {"id": 19, "name": "Life Scroll", "price": 3000, "effect": "Revive + 20% XP"},
-        {"id": 20, "name": "Divine Elixir", "price": 4000, "effect": "Revive with full stats"},
-        {"id": 21, "name": "Resurrection Stone", "price": 5000, "effect": "Revive 2 times"},
-        {"id": 22, "name": "Angel Tear", "price": 6500, "effect": "Revive + Shield for 1 turn"},
-        {"id": 23, "name": "Holy Water", "price": 7000, "effect": "Revive + Full HP"},
-        {"id": 24, "name": "God’s Blessing", "price": 9000, "effect": "Auto Revive once"},
-        {"id": 25, "name": "Immortal Charm", "price": 12000, "effect": "Revive + Invincible 1 turn"},
-    ],
-    "poison": [
-        {"id": 26, "name": "Poison Dagger", "price": 700, "damage": 15},
-        {"id": 27, "name": "Venom Bottle", "price": 1200, "damage": 25},
-        {"id": 28, "name": "Toxin Bomb", "price": 2000, "damage": 40},
-        {"id": 29, "name": "Paralysis Poison", "price": 2500, "damage": 50},
-        {"id": 30, "name": "Deadly Venom", "price": 3500, "damage": 80},
-        {"id": 31, "name": "Corruption Gas", "price": 4000, "damage": 100},
-        {"id": 32, "name": "Silent Killer", "price": 5000, "damage": 120},
-        {"id": 33, "name": "Toxic Arrow", "price": 6000, "damage": 140},
-        {"id": 34, "name": "Necro Venom", "price": 7500, "damage": 180},
-        {"id": 35, "name": "Plague Bomb", "price": 9000, "damage": 220},
-    ],
-    "special": [
-        {"id": 36, "name": "Hunter Key", "price": 300, "effect": "Unlock dungeons"},
-        {"id": 37, "name": "Magic Shield", "price": 2000, "effect": "Reduce damage 20%"},
-        {"id": 38, "name": "Golden Armor", "price": 5000, "effect": "Reduce damage 50%"},
-        {"id": 39, "name": "XP Booster", "price": 1500, "effect": "Gain double XP"},
-        {"id": 40, "name": "Lucky Charm", "price": 1200, "effect": "Increase drop rate"},
-        {"id": 41, "name": "Soul Orb", "price": 2500, "effect": "Extra summon power"},
-        {"id": 42, "name": "Dark Crystal", "price": 4000, "effect": "Boost poison attack"},
-        {"id": 43, "name": "Sacred Ring", "price": 6000, "effect": "Immune to poison 2 turns"},
-        {"id": 44, "name": "Teleport Scroll", "price": 1000, "effect": "Escape from battle"},
-        {"id": 45, "name": "Binding Chains", "price": 2000, "effect": "Stun enemy 1 turn"},
-        {"id": 46, "name": "Power Elixir", "price": 3000, "effect": "Increase damage 30%"},
-        {"id": 47, "name": "Stamina Potion", "price": 1500, "effect": "Restore 100 stamina"},
-        {"id": 48, "name": "Hunter Medal", "price": 500, "effect": "Collectible"},
-        {"id": 49, "name": "Dimensional Stone", "price": 7000, "effect": "Summon ally"},
-        {"id": 50, "name": "Time Relic", "price": 10000, "effect": "Take extra turn"},
-    ]
+  "swords": [
+    {"id": 1, "name": "Iron Sword", "price": 200, "damage": 10},
+    {"id": 2, "name": "Steel Sword", "price": 500, "damage": 20},
+    {"id": 3, "name": "Silver Sword", "price": 800, "damage": 30},
+    {"id": 4, "name": "Magic Sword", "price": 1500, "damage": 50},
+    {"id": 5, "name": "Flame Sword", "price": 2200, "damage": 70},
+    {"id": 6, "name": "Ice Sword", "price": 2500, "damage": 80},
+    {"id": 7, "name": "Thunder Sword", "price": 3000, "damage": 100},
+    {"id": 8, "name": "Dark Sword", "price": 4000, "damage": 120},
+    {"id": 9, "name": "Light Sword", "price": 4200, "damage": 125},
+    {"id": 10, "name": "Dragon Slayer", "price": 5000, "damage": 150},
+    {"id": 11, "name": "Shadow Blade", "price": 6000, "damage": 180},
+    {"id": 12, "name": "Heavenly Sword", "price": 7500, "damage": 200},
+    {"id": 13, "name": "Chaos Sword", "price": 10000, "damage": 250},
+    {"id": 14, "name": "Demonic Sword", "price": 12000, "damage": 300},
+    {"id": 15, "name": "Excalibur", "price": 15000, "damage": 400}
+  ],
+  "revival": [
+    {"id": 16, "name": "Revival Potion", "price": 500, "effect": "Revive with 20% HP"},
+    {"id": 17, "name": "Strong Revival Potion", "price": 1200, "effect": "Revive with 50% HP"},
+    {"id": 18, "name": "Phoenix Feather", "price": 2500, "effect": "Revive with 100% HP"},
+    {"id": 19, "name": "Life Scroll", "price": 3000, "effect": "Revive + 20% XP"},
+    {"id": 20, "name": "Divine Elixir", "price": 4000, "effect": "Revive with full stats"},
+    {"id": 21, "name": "Resurrection Stone", "price": 5000, "effect": "Revive 2 times"},
+    {"id": 22, "name": "Angel Tear", "price": 6500, "effect": "Revive + Shield for 1 turn"},
+    {"id": 23, "name": "Holy Water", "price": 7000, "effect": "Revive + Full HP"},
+    {"id": 24, "name": "God’s Blessing", "price": 9000, "effect": "Auto Revive once"},
+    {"id": 25, "name": "Immortal Charm", "price": 12000, "effect": "Revive + Invincible 1 turn"}
+  ],
+  "poison": [
+    {"id": 26, "name": "Poison Dagger", "price": 700, "damage": 15},
+    {"id": 27, "name": "Venom Bottle", "price": 1200, "damage": 25},
+    {"id": 28, "name": "Toxin Bomb", "price": 2000, "damage": 40},
+    {"id": 29, "name": "Paralysis Poison", "price": 2500, "damage": 50},
+    {"id": 30, "name": "Deadly Venom", "price": 3500, "damage": 80},
+    {"id": 31, "name": "Corruption Gas", "price": 4000, "damage": 100},
+    {"id": 32, "name": "Silent Killer", "price": 5000, "damage": 120},
+    {"id": 33, "name": "Toxic Arrow", "price": 6000, "damage": 140},
+    {"id": 34, "name": "Necro Venom", "price": 7500, "damage": 180},
+    {"id": 35, "name": "Plague Bomb", "price": 9000, "damage": 220}
+  ],
+  "special": [
+    {"id": 36, "name": "Hunter Key", "price": 300, "effect": "Unlock dungeons"},
+    {"id": 37, "name": "Magic Shield", "price": 2000, "effect": "Reduce damage 20%"},
+    {"id": 38, "name": "Golden Armor", "price": 5000, "effect": "Reduce damage 50%"},
+    {"id": 39, "name": "XP Booster", "price": 1500, "effect": "Gain double XP"},
+    {"id": 40, "name": "Lucky Charm", "price": 1200, "effect": "Increase drop rate"},
+    {"id": 41, "name": "Soul Orb", "price": 2500, "effect": "Extra summon power"},
+    {"id": 42, "name": "Dark Crystal", "price": 4000, "effect": "Boost poison attack"},
+    {"id": 43, "name": "Sacred Ring", "price": 6000, "effect": "Immune to poison 2 turns"},
+    {"id": 44, "name": "Teleport Scroll", "price": 1000, "effect": "Escape from battle"},
+    {"id": 45, "name": "Binding Chains", "price": 2000, "effect": "Stun enemy 1 turn"},
+    {"id": 46, "name": "Power Elixir", "price": 3000, "effect": "Increase damage 30%"},
+    {"id": 47, "name": "Stamina Potion", "price": 1500, "effect": "Restore 100 stamina"},
+    {"id": 48, "name": "Hunter Medal", "price": 500, "effect": "Collectible"},
+    {"id": 49, "name": "Dimensional Stone", "price": 7000, "effect": "Summon ally"},
+    {"id": 50, "name": "Time Relic", "price": 10000, "effect": "Take extra turn"}
+  ]
 }
 
-# Loan System
-LOAN_OFFERS = [
-    {"amount": 5000, "interest": 10, "repayment_turns": 10},
-    {"amount": 10000, "interest": 8, "repayment_turns": 15},
-    {"amount": 25000, "interest": 5, "repayment_turns": 20},
-]
-# Daily Tasks
-DAILY_TASKS = [
-    {"task": "Win a PvP match", "reward_type": "won", "reward_value": 5000},
-    {"task": "Defeat the EvilBot", "reward_type": "keys", "reward_value": 1},
-    {"task": "Buy an item from the shop", "reward_type": "revival_item", "reward_value": "Revival Potion"},
-]
+# Build ITEM_INDEX for lookups
+ITEM_INDEX = {}
+for cat, arr in SHOP_ITEMS.items():
+    for it in arr:
+        it_copy = dict(it)
+        it_copy["category"] = cat
+        ITEM_INDEX[it["id"]] = it_copy
 
-# --- Data Persistence Functions ---
-def load_user_data():
-    global users
-    if os.path.exists(USER_DATA_FILE):
-        with open(USER_DATA_FILE, "r") as f:
-            try:
-                users = {int(k): v for k, v in json.load(f).items()}
-            except json.JSONDecodeError:
-                users = {}
-    else:
-        users = {}
-    # Make sure all users have a loan key
-    for user_id in users:
-        if "loan" not in users[user_id]:
-            users[user_id]["loan"] = 0
-        if "loan_amount" not in users[user_id]:
-            users[user_id]["loan_amount"] = 0
-        if "loan_interest" not in users[user_id]:
-            users[user_id]["loan_interest"] = 0
-        if "daily_tasks_done" not in users[user_id]:
-            users[user_id]["daily_tasks_done"] = 0
-        if "daily_task_date" not in users[user_id]:
-            users[user_id]["daily_task_date"] = None
+# ---------------------------
+# Persistence helpers (users.json)
+# ---------------------------
+def _ensure_datafile():
+    with _file_lock:
+        if not os.path.exists(DATA_FILE):
+            base = {
+                "users": {},
+                "user_items": {},
+                "battles": {},
+                "loans": {},
+                "daily_tasks": {},
+                "config": {
+                    "pvp_rewards": {
+                        "xp_win": 100000,
+                        "won_win": 1000000,
+                        "pvp_points_win": 22,
+                        "xp_lose": 500,
+                        "won_lose": -100000,
+                        "pvp_points_lose": -26
+                    }
+                }
+            }
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(base, f, indent=2)
 
-def save_user_data():
-    with open(USER_DATA_FILE, "w") as f:
-        json.dump(users, f, indent=4)
+def read_data():
+    _ensure_datafile()
+    with _file_lock:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-load_user_data()
+def write_data(data):
+    with _file_lock:
+        tmp = DATA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, DATA_FILE)
 
-def get_item_by_id(item_id: int):
-    for category_items in SHOP_ITEMS.values():
-        for item in category_items:
-            if item["id"] == item_id:
-                return item
-    return None
+# ---------------------------
+# Utility functions
+# ---------------------------
+def format_money(n):
+    return f"{n:,}"
 
-def get_rank_from_points(pvp_points):
-    for rank, threshold in RANK_THRESHOLDS.items():
-        if pvp_points >= threshold:
-            continue
-        else:
-            return rank
-    return RANKS[-1]
-
-def get_health_bar(current_hp, max_hp=100, bar_length=10):
-    filled_squares = int((max(0, current_hp) / max_hp) * bar_length)
-    empty_squares = bar_length - filled_squares
-    return "🟢" * filled_squares + "⚪" * empty_squares
-
-def get_strength_bar(strength, max_strength=100, bar_length=10):
-    filled_squares = int((strength / max_strength) * bar_length)
-    empty_squares = bar_length - filled_squares
-    return "🔵" * filled_squares + "⚪" * empty_squares
-
-# --- Conversation States ---
-# Pvp states
-START_PVP, PVP_ACTION = range(2)
-
-# --- Commands ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in users:
-        users[user_id] = {
-            "level": 0, "rank": "E", "xp": 0, "won": 1000, "hp": 100,
-            "strength": 10, "inventory": [], "wins": 0, "losses": 0,
-            "pvp_points": 0, "loan": 0, "loan_amount": 0, "loan_interest": 0,
-            "daily_tasks_done": 0, "daily_task_date": None,
-            "full_name": update.effective_user.full_name
+def ensure_user(data, tg_user):
+    users = data.setdefault("users", {})
+    uid = str(tg_user.id)
+    if uid not in users:
+        users[uid] = {
+            "id": tg_user.id,
+            "username": tg_user.username or "",
+            "first_name": tg_user.first_name or "",
+            "level": 0,
+            "xp": 0,
+            "rank": "E",
+            "won": 0,
+            "pvp_points": 0,
+            "wins": 0,
+            "losses": 0,
+            "registered_at": datetime.utcnow().isoformat(),
+            "local_gc": None,
+            "title": ""
         }
-        save_user_data()
-        await update.message.reply_text(
-            f"Welcome, {update.effective_user.full_name}! You are now registered as a Hunter."
-            f"\nYour starting rank is E and your balance is 1000 won."
-        )
-    else:
-        await update.message.reply_text("You are already a registered Hunter.")
+        write_data(data)
+    return users[uid]
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target_user = update.effective_user
+def get_user(data, user_id):
+    return data.get("users", {}).get(str(user_id))
+
+def save_user(data, user_obj):
+    data.setdefault("users", {})[str(user_obj["id"])] = user_obj
+    write_data(data)
+
+def add_item_to_user(data, user_id, item_id, qty=1, unlocked=False):
+    ui = data.setdefault("user_items", {})
+    key = str(user_id)
+    arr = ui.setdefault(key, [])
+    # merge with same item (if not unlocked)
+    for entry in arr:
+        if entry["item_id"] == item_id and not entry.get("unlocked", False):
+            entry["quantity"] = entry.get("quantity", 0) + qty
+            write_data(data)
+            return entry
+    entry = {"item_id": item_id, "quantity": qty, "unlocked": unlocked, "acquired_at": datetime.utcnow().isoformat()}
+    arr.append(entry)
+    write_data(data)
+    return entry
+
+def user_items(data, user_id):
+    return data.get("user_items", {}).get(str(user_id), [])
+
+def hp_bar(hp, max_hp):
+    seg = 10
+    filled = int(max(0, hp) / max_hp * seg) if max_hp>0 else 0
+    return "🟢" * filled + "⚪" * (seg - filled)
+
+def strength_bar(value, max_value=200):
+    seg = 10
+    filled = int(min(value, max_value) / max_value * seg)
+    return "🔵" * filled + "⚪" * (seg - filled)
+
+# Battle formulas (tweakable)
+def max_hp_for_level(level):
+    return 100 + level * 10
+
+def base_strength(level):
+    return 5 + level // 2
+
+# ---------------------------
+# Decorator to load data into context
+# ---------------------------
+def with_data(func):
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        data = read_data()
+        context.chat_data["data"] = data
+        try:
+            return await func(update, context, data)
+        finally:
+            # changes should call write_data explicitly in helper functions
+            pass
+    return wrapped
+
+# ---------------------------
+# Command Handlers
+# ---------------------------
+
+@with_data
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    user = update.effective_user
+    ensure_user(data, user)
+    await update.message.reply_text(f"Welcome, {user.first_name}! You are registered as Level 0, Rank E. Use /help to view commands.")
+
+@with_data
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    # If reply to someone, show that user's profile else self
     if update.message.reply_to_message:
-        target_user = update.message.reply_to_message.from_user
-
-    user_data = users.get(target_user.id)
-    if not user_data:
-        await update.message.reply_text("User is not registered.")
-        return
-
-    profile_msg = (
-        f"**Hunter Profile: {user_data.get('full_name', target_user.full_name)}**\n\n"
-        f"Level: {user_data.get('level', 0)}\n"
-        f"Rank: {user_data.get('rank', 'E')}\n"
-        f"Balance: {user_data.get('won', 0)} won\n"
-        f"Items: {len(user_data.get('inventory', []))}\n"
-        f"PvP Record: {user_data.get('wins', 0)} Wins / {user_data.get('losses', 0)} Losses\n"
-        f"PvP Points: {user_data.get('pvp_points', 0)}"
-    )
-    await update.message.reply_markdown(profile_msg)
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data = users.get(user_id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-    
-    strength_bar = get_strength_bar(user_data['strength'])
-    
-    # Calculate next rank and points needed
-    current_rank_index = RANKS.index(user_data['rank'])
-    if current_rank_index < len(RANKS) - 1:
-        next_rank = RANKS[current_rank_index + 1]
-        next_rank_threshold = RANK_THRESHOLDS.get(next_rank, 0)
-        points_needed = next_rank_threshold - user_data['pvp_points']
+        target = update.message.reply_to_message.from_user
     else:
-        next_rank = "Max Rank"
-        points_needed = 0
-
-    status_msg = (
-        f"**Hunter Status: {user_data['full_name']}**\n\n"
-        f"Strength: {user_data['strength']}\n"
-        f"{strength_bar}\n\n"
-        f"Current Rank: {user_data['rank']}\n"
-        f"PvP Points: {user_data['pvp_points']}\n"
-        f"Next Rank: {next_rank} (Needs {max(0, points_needed)} points)"
-    )
-    await update.message.reply_markdown(status_msg)
-
-async def won_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = users.get(update.effective_user.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
+        target = update.effective_user
+    u = get_user(data, target.id)
+    if not u:
+        await update.message.reply_text("User not registered.")
         return
-    await update.message.reply_text(f"Your current balance is {user_data['won']} won.")
+    items = user_items(data, target.id)
+    text = (f"Profile — {target.first_name}\n"
+            f"Level: {u['level']}  Rank: {u['rank']}\n"
+            f"XP: {u['xp']}  Won: {format_money(u['won'])}\n"
+            f"Wins: {u['wins']}  Losses: {u['losses']}\n"
+            f"Items: {len(items)}\n"
+            f"Title: {u.get('title','')}")
+    await update.message.reply_text(text)
 
-async def bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data = users.get(user_id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
+@with_data
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    user = update.effective_user
+    u = get_user(data, user.id)
+    if not u:
+        u = ensure_user(data, user)
+    strength = base_strength(u["level"])
+    need = 0
+    # simplified next rank logic (can be extended)
+    next_pts = {"E": 100, "D": 300, "C": 700, "B": 1500, "A": 3000}.get(u["rank"], 999999)
+    need = max(0, next_pts - u["pvp_points"])
+    await update.message.reply_text(f"Status — {user.first_name}\nStrength: {strength}\nPVP Points: {u['pvp_points']}\nPoints needed for next rank: {need}")
 
-    if user_data['loan_amount'] > 0:
-        await update.message.reply_text("You already have an outstanding loan. Use /myloan to check it.")
-        return
+# ---------------------------
+# SHOP / BUY / INVENTORY
+# ---------------------------
 
+@with_data
+async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
     kb = [
-        [InlineKeyboardButton(f"Take Loan: {offer['amount']} won ({offer['interest']}% interest)", callback_data=f"take_loan_{offer['amount']}_{offer['interest']}")]
-        for offer in LOAN_OFFERS
+        [InlineKeyboardButton("All Items", callback_data="shop:all")],
+        [InlineKeyboardButton("Swords", callback_data="shop:swords"),
+         InlineKeyboardButton("Revival Items", callback_data="shop:revival")],
+        [InlineKeyboardButton("Poison", callback_data="shop:poison"),
+         InlineKeyboardButton("Special", callback_data="shop:special")]
     ]
-    await update.message.reply_text("💰 **Bank Loan Offers**\n\nChoose an offer to take a loan:", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await update.message.reply_text("Shop — choose a category (or use /buy <item_id>):", reply_markup=InlineKeyboardMarkup(kb))
 
-async def myloan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data = users.get(user_id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-    
-    if user_data['loan_amount'] > 0:
-        await update.message.reply_text(
-            f"You have an outstanding loan of **{user_data['loan_amount']} won** at **{user_data['loan_interest']}%** interest."
-            f"\n\nTo repay, use /repay <amount>.", parse_mode="Markdown"
-        )
-    else:
-        await update.message.reply_text("You have no outstanding loans.")
-
-async def take_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def shop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data.split('_')
-    amount = int(data[2])
-    interest = int(data[3])
-    
-    user_id = query.from_user.id
-    user_data = users.get(user_id)
-    
-    user_data['loan_amount'] = amount + (amount * interest / 100)
-    user_data['loan_interest'] = interest
-    user_data['won'] += amount
-    save_user_data()
-    
-    await query.edit_message_text(f"✅ Loan of {amount} won taken! Your new balance is {user_data['won']} won.")
-
-async def rank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target_user = update.effective_user
-    if update.message.reply_to_message:
-        target_user = update.message.reply_to_message.from_user
-
-    user_data = users.get(target_user.id)
-    if not user_data:
-        await update.message.reply_text("User is not registered.")
-        return
-    await update.message.reply_text(f"{user_data.get('full_name', target_user.full_name)}'s current rank is {user_data.get('rank', 'E')}.")
-
-async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target_user = update.effective_user
-    if update.message.reply_to_message:
-        target_user = update.message.reply_to_message.from_user
-
-    user_data = users.get(target_user.id)
-    if not user_data:
-        await update.message.reply_text("User is not registered.")
-        return
-    await update.message.reply_text(f"{user_data.get('full_name', target_user.full_name)}'s current level is {user_data.get('level', 0)}.")
-
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("All Items", callback_data="shop_all")],
-        [InlineKeyboardButton("Swords", callback_data="shop_swords"),
-         InlineKeyboardButton("Revival Items", callback_data="shop_revival")]
-    ])
-    await update.message.reply_text("🛒 **Welcome to the Shop!**\n\nChoose a category:", reply_markup=kb, parse_mode="Markdown")
-
-async def handle_shop_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    category = query.data.split("_")[1]
-    
-    items_to_show = []
-    if category == "all":
-        for cat in SHOP_ITEMS.values():
-            items_to_show.extend(cat)
+    data = read_data()
+    _, cat = query.data.split(":", 1)
+    lines = []
+    if cat == "all":
+        for c, items in SHOP_ITEMS.items():
+            for it in items:
+                lines.append(f"{it['id']}. {it['name']} — {format_money(it.get('price',0))} won")
     else:
-        items_to_show = SHOP_ITEMS.get(category, [])
+        items = SHOP_ITEMS.get(cat, [])
+        for it in items:
+            lines.append(f"{it['id']}. {it['name']} — {format_money(it.get('price',0))} won")
+    text = f"Category: {cat}\n\n" + "\n".join(lines[:60])
+    await query.edit_message_text(text)
 
-    message_text = f"**{category.capitalize()} Items:**\n\n"
-    for item in items_to_show:
-        details = f"ID: {item['id']} - {item['name']} - Price: {item['price']} won"
-        if "damage" in item:
-            details += f", Damage: {item['damage']}"
-        if "effect" in item:
-            details += f", Effect: {item['effect']}"
-        message_text += f"• {details}\n"
-
-    await query.edit_message_text(message_text, parse_mode="Markdown")
-
-async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@with_data
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    # usage: /buy <item_id>
+    if not context.args:
+        await update.message.reply_text("Usage: /buy <item_id>")
+        return
     try:
         item_id = int(context.args[0])
-    except (IndexError, ValueError):
-        await update.message.reply_text("Please specify a valid item number. Example: /buy 1")
+    except:
+        await update.message.reply_text("Invalid item id.")
         return
-
-    item = get_item_by_id(item_id)
+    item = ITEM_INDEX.get(item_id)
     if not item:
-        await update.message.reply_text("Item not found in the shop.")
+        await update.message.reply_text("Item not found.")
         return
-
-    user_id = update.effective_user.id
-    user_data = users.get(user_id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-    
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Yes", callback_data=f"buy_confirm_{item_id}"),
-         InlineKeyboardButton("❌ No", callback_data="buy_cancel")]
-    ])
-
-    details = f"🛒 **{item['name']}** - Price: {item['price']} won"
+    text = f"Item: {item['name']}\nPrice: {format_money(item.get('price',0))} won\n"
     if "damage" in item:
-        details += f"\nDamage: {item['damage']}"
+        text += f"Damage: {item['damage']}\n"
     if "effect" in item:
-        details += f"\nEffect: {item['effect']}"
-    
-    await update.message.reply_markdown(
-        f"{details}\n\nDo you want to buy this item?",
-        reply_markup=kb
-    )
+        text += f"Effect: {item['effect']}\n"
+    kb = [[InlineKeyboardButton("✅ Yes, buy", callback_data=f"buy_confirm:{item_id}"),
+           InlineKeyboardButton("❌ No, cancel", callback_data="buy_cancel")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
-async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def buy_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-    user_data = users.get(user_id)
-    
-    if data.startswith("buy_confirm_"):
-        item_id = int(data.split("_")[2])
-        item = get_item_by_id(item_id)
-        
-        if user_data["won"] < item["price"]:
-            await query.edit_message_text(
-                f"💸 Not enough won! You have {user_data['won']} but need {item['price']}."
-            )
-            return
-
-        user_data["won"] -= item["price"]
-        user_data["inventory"].append(item["name"])
-        save_user_data()
-
-        await query.edit_message_text(
-            f"✅ You bought {item['name']} for {item['price']} won!\n"
-            f"Remaining balance: {user_data['won']} won."
-        )
-    elif data == "buy_cancel":
-        await query.edit_message_text("❌ Purchase cancelled.")
-
-async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = users.get(update.effective_user.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
+    _, raw = query.data.split(":",1)
+    item_id = int(raw)
+    item = ITEM_INDEX.get(item_id)
+    data = read_data()
+    user = query.from_user
+    u = get_user(data, user.id)
+    if not u:
+        u = ensure_user(data, user)
+    price = item.get("price", 0)
+    if u["won"] < price:
+        await query.edit_message_text(f"Insufficient won. You have {format_money(u['won'])} won.")
         return
+    u["won"] -= price
+    add_item_to_user(data, user.id, item_id, qty=1, unlocked=(item.get("category")=="special" and "shadow" in item.get("name","").lower()))
+    save_user(data, u)
+    await query.edit_message_text(f"Bought {item['name']} for {format_money(price)} won.\nRemaining: {format_money(u['won'])} won")
 
-    if not user_data["inventory"]:
+async def buy_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Purchase cancelled.")
+
+@with_data
+async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    user = update.effective_user
+    items = user_items(data, user.id)
+    if not items:
         await update.message.reply_text("Your inventory is empty.")
         return
+    lines = []
+    for e in items:
+        it = ITEM_INDEX.get(e["item_id"], {"name":"Unknown"})
+        lines.append(f"{it['name']} x{e.get('quantity',1)} {'(permanent)' if e.get('unlocked') else ''}")
+    await update.message.reply_text("Your Items:\n" + "\n".join(lines))
 
-    item_counts = {}
-    for item in user_data["inventory"]:
-        item_counts[item] = item_counts.get(item, 0) + 1
+# ---------------------------
+# PvP system (group-only)
+# ---------------------------
 
-    inventory_msg = "**Your Inventory:**\n\n"
-    for item, count in item_counts.items():
-        inventory_msg += f"• {item} (x{count})\n"
-
-    await update.message.reply_markdown(inventory_msg)
-
-async def swords(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = users.get(update.effective_user.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-    
-    sword_list = [item for item in user_data['inventory'] if any(sword['name'] == item for sword in SHOP_ITEMS['swords'])]
-    
-    if not sword_list:
-        await update.message.reply_text("You have no swords in your inventory.")
-        return
-        
-    swords_msg = "**Your Swords:**\n\n"
-    for sword in sword_list:
-        swords_msg += f"• {sword}\n"
-    
-    await update.message.reply_markdown(swords_msg)
-
-async def revivalitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = users.get(update.effective_user.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-    
-    revival_list = [item for item in user_data['inventory'] if any(revival['name'] == item for revival in SHOP_ITEMS['revival'])]
-    
-    if not revival_list:
-        await update.message.reply_text("You have no revival items in your inventory.")
-        return
-        
-    revival_msg = "**Your Revival Items:**\n\n"
-    for item in revival_list:
-        revival_msg += f"• {item}\n"
-    
-    await update.message.reply_markdown(revival_msg)
-
-async def dailytask(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = users.get(update.effective_user.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-    
-    import datetime
-    today = datetime.date.today().isoformat()
-    
-    if user_data.get('daily_task_date') == today:
-        await update.message.reply_text("You have already received your daily tasks for today.")
-        return
-
-    tasks = random.sample(DAILY_TASKS, 3)
-    user_data['daily_tasks'] = tasks
-    user_data['daily_task_date'] = today
-    save_user_data()
-
-    task_msg = "**Daily Tasks:**\n\n"
-    for i, task in enumerate(tasks):
-        task_msg += f"{i+1}. {task['task']}\n"
-    task_msg += "\nComplete these tasks to claim your reward with /taskreward."
-    
-    await update.message.reply_markdown(task_msg)
-
-async def taskreward(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = users.get(update.effective_user.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-
-    import datetime
-    today = datetime.date.today().isoformat()
-    if user_data.get('daily_task_date') != today:
-        await update.message.reply_text("You have not received your daily tasks yet. Use /dailytask.")
-        return
-
-    if user_data.get('daily_tasks_done') >= len(user_data.get('daily_tasks', [])):
-        await update.message.reply_text("You have already completed your tasks for today.")
-        return
-    
-    # Simple logic: assume tasks are completed. You'll need to add a check for task completion later
-    
-    reward_type = random.choice(["won", "keys", "revival_item"])
-    reward_value = 0
-    reward_msg = ""
-    
-    if reward_type == "won":
-        reward_value = 5000
-        user_data['won'] += reward_value
-        reward_msg = f"🎉 You completed your task and received {reward_value} won!"
-    elif reward_type == "keys":
-        reward_value = 1
-        user_data['inventory'].append("Hunter Key")
-        reward_msg = f"🎉 You completed your task and received a Hunter Key!"
-    elif reward_type == "revival_item":
-        reward_value = "Revival Potion"
-        user_data['inventory'].append("Revival Potion")
-        reward_msg = f"🎉 You completed your task and received a Revival Potion!"
-    
-    user_data['daily_tasks_done'] += 1
-    save_user_data()
-    await update.message.reply_text(reward_msg)
-
-async def tophunters(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sorted_hunters = sorted(users.values(), key=lambda x: x.get('pvp_points', 0), reverse=True)
-    top_10 = sorted_hunters[:10]
-    
-    msg = "**🏆 Top 10 High Rank Hunters (Global)**\n\n"
-    for i, hunter in enumerate(top_10):
-        msg += f"{i+1}. {hunter['full_name']} (Rank: {hunter['rank']}, PvP Points: {hunter['pvp_points']})\n"
-        
-    await update.message.reply_markdown(msg)
-
-async def globleleader(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sorted_hunters = sorted(users.values(), key=lambda x: (x.get('level', 0), x.get('won', 0)), reverse=True)
-    top_10 = sorted_hunters[:10]
-    
-    msg = "**🌐 Global Leaders (Level & Won)**\n\n"
-    for i, hunter in enumerate(top_10):
-        msg += f"{i+1}. {hunter['full_name']} (Level: {hunter['level']}, Won: {hunter['won']})\n"
-        
-    await update.message.reply_markdown(msg)
-
-async def localleader(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    chat_members_ids = [member.user.id for member in await context.bot.get_chat_members_count(chat_id)]
-    
-    local_users = [users.get(uid) for uid in chat_members_ids if uid in users]
-    
-    sorted_local_users = sorted(local_users, key=lambda x: (x.get('level', 0), x.get('won', 0)), reverse=True)
-    top_10 = sorted_local_users[:10]
-    
-    msg = f"**👥 Local Leaders for this Group**\n\n"
-    for i, user in enumerate(top_10):
-        msg += f"{i+1}. {user['full_name']} (Level: {user['level']}, Won: {user['won']})\n"
-    
-    await update.message.reply_markdown(msg)
-    
-async def wongive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sender_id = update.effective_user.id
+@with_data
+async def pvp(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    # Must be a reply to challenge someone
     if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to the user you want to give won to.")
+        await update.message.reply_text("Reply to a user's message with /pvp to challenge them in this group.")
         return
-    
-    recipient_id = update.message.reply_to_message.from_user.id
-    if sender_id == recipient_id:
-        await update.message.reply_text("You cannot give won to yourself.")
-        return
-        
-    try:
-        amount = int(context.args[0])
-    except (IndexError, ValueError):
-        await update.message.reply_text("Please specify a valid amount. Example: /wongive 100")
-        return
-        
-    sender_data = users.get(sender_id)
-    recipient_data = users.get(recipient_id)
-    
-    if not sender_data or not recipient_data:
-        await update.message.reply_text("Both users must be registered Hunters.")
-        return
-    
-    if sender_data["won"] < amount:
-        await update.message.reply_text("You don't have enough won.")
-        return
-        
-    sender_data["won"] -= amount
-    recipient_data["won"] += amount
-    save_user_data()
-    
-    await update.message.reply_text(f"You gave {amount} won to {recipient_data['full_name']}.")
-
-async def title(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data = users.get(user_id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return
-
-    # A simple example of title based on rank
-    user_rank = user_data['rank']
-    if user_rank == "A":
-        title_name = "Elite Hunter"
-    elif user_rank.startswith("S"):
-        title_name = "S-Rank Hunter"
-    elif user_rank.startswith("SJP"):
-        title_name = "Shadow Monarch"
-    else:
-        title_name = "Apprentice"
-    
-    await update.message.reply_text(f"Your current title is: **{title_name}**", parse_mode="Markdown")
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "**Available Commands:**\n\n"
-        "/start - Register as a Hunter.\n"
-        "/profile - View your profile or another user's profile.\n"
-        "/status - Check your strength and rank progression.\n"
-        "/pvp - Challenge another user to a PvP battle (reply to them).\n"
-        "/pvpbot - Challenge a bot to a PvP battle.\n"
-        "/won - Check your current won balance.\n"
-        "/bank - View loan offers.\n"
-        "/myloan - Check your outstanding loan.\n"
-        "/rank - View your rank or another user's rank.\n"
-        "/level - View your level or another user's level.\n"
-        "/shop - Open the shop.\n"
-        "/buy <item_id> - Buy an item from the shop.\n"
-        "/inventory - View your inventory.\n"
-        "/swords - Check your sword inventory.\n"
-        "/revivalitem - Check your revival item inventory.\n"
-        "/dailytask - Get your daily tasks.\n"
-        "/taskreward - Claim your task rewards.\n"
-        "/tophunters - See the top-ranked Hunters globally.\n"
-        "/globleleader - See the global leaders in level and won.\n"
-        "/localleader - See the local leaders in this group.\n"
-        "/wongive - Give won to another user (reply to them).\n"
-        "/title - View your current title.\n"
-        "/help - View this help message.\n"
-        "/guide - Get a guide on how the bot works.\n"
-        "/owner - Contact the bot owner."
-    )
-    await update.message.reply_markdown(help_text)
-
-async def guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    guide_text = (
-        "**Solo Leveling Bot Guide**\n\n"
-        "Welcome to the world of Hunters! Here's how to play:\n\n"
-        "1.  **Start Your Journey:** Use `/start` to become a hunter. You will begin at Level 0, Rank E.\n\n"
-        "2.  **Gain Power:** Engage in PvP battles with other users or the bot using `/pvp` and `/pvpbot`. Winning battles earns you XP to level up and PvP points to increase your rank.\n\n"
-        "3.  **Rank Up:** Your rank progresses from E to SJP100. At certain ranks (S20, S40, S60, S80, S100), you will face special boss battles against powerful hunters from the Solo Leveling anime. Winning these battles gives you their unique abilities as permanent items!\n\n"
-        "4.  **Manage Resources:** Use `/won` to check your currency. You can buy items from the `/shop` and view your belongings with `/inventory`.\n\n"
-        "5.  **PvP Combat:** Battles are turn-based and happen in a single message. You can choose to Attack, Defend, or use items. The outcome depends on your strength, luck, and the items you use."
-    )
-    await update.message.reply_markdown(guide_text)
-
-async def owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"You can contact the owner, Nightking, on Telegram @Nightking1515. His user ID is {OWNER_ID}.")
-
-# --- PvP Conversation Handler ---
-async def pvp_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Please reply to a user to start PvP.")
-        return ConversationHandler.END
-    
     challenger = update.effective_user
-    opponent = update.message.reply_to_message.from_user
-    
-    if challenger.id == opponent.id:
-        await update.message.reply_text("You cannot challenge yourself!")
-        return ConversationHandler.END
+    target = update.message.reply_to_message.from_user
+    if challenger.id == target.id:
+        await update.message.reply_text("You cannot challenge yourself.")
+        return
+    # send challenge with accept/decline inline buttons
+    kb = [[InlineKeyboardButton("Accept ✅", callback_data=f"pvp_accept:{challenger.id}:{target.id}"),
+           InlineKeyboardButton("Decline ❌", callback_data=f"pvp_decline:{challenger.id}:{target.id}")]]
+    await update.message.reply_text(f"🔥 Battle Request!\n{challenger.first_name} challenged {target.first_name} to a duel!\n{target.first_name}, accept?", reply_markup=InlineKeyboardMarkup(kb))
 
-    if update.effective_chat.id in FIGHT_STATE and FIGHT_STATE[update.effective_chat.id]["in_progress"]:
-        await update.message.reply_text("A fight is already in progress in this chat!")
-        return ConversationHandler.END
-
-    FIGHT_STATE[update.effective_chat.id] = {
-        "fighter1": {"id": challenger.id, "name": challenger.full_name, "hp": 100},
-        "fighter2": {"id": opponent.id, "name": opponent.full_name, "hp": 100},
-        "turn": challenger.id,
-        "is_bot_fight": False,
-        "in_progress": True,
-        "message_id": None,
-        "is_special_battle": False,
-        "special_hunter": None
-    }
-    
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Yes", callback_data="pvp_accept"), InlineKeyboardButton("No", callback_data="pvp_decline")]])
-    await update.message.reply_text(
-        f"⚔️ {challenger.full_name} has challenged {opponent.full_name} to a PvP battle!\n"
-        f"Hey {opponent.full_name}, do you accept?", reply_markup=kb
-    )
-    return START_PVP
-
-async def pvp_bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    challenger = update.effective_user
-    user_data = users.get(challenger.id)
-    if not user_data:
-        await update.message.reply_text("You are not a registered Hunter. Use /start.")
-        return ConversationHandler.END
-
-    if update.effective_chat.id in FIGHT_STATE and FIGHT_STATE[update.effective_chat.id]["in_progress"]:
-        await update.message.reply_text("A fight is already in progress in this chat!")
-        return ConversationHandler.END
-    
-    is_special = False
-    special_name = "EvilBot"
-    
-    user_rank = user_data["rank"]
-    if user_rank in SPECIAL_HUNTERS.values():
-        await update.message.reply_text("You have a special Hunter battle coming up soon! You can only challenge the Hunter corresponding to your rank.")
-        return ConversationHandler.END
-
-    if user_rank.startswith("S"):
-        rank_num = int(user_rank[1:])
-        if rank_num in SPECIAL_HUNTERS:
-            is_special = True
-            special_name = SPECIAL_HUNTERS[rank_num]
-    elif user_rank.startswith("SJP"):
-        rank_num = int(user_rank[3:])
-        if rank_num in SPECIAL_SHADOWS:
-            is_special = True
-            special_name = SPECIAL_SHADOWS[rank_num]
-    
-    FIGHT_STATE[update.effective_chat.id] = {
-        "fighter1": {"id": challenger.id, "name": challenger.full_name, "hp": 100, "strength": user_data['strength']},
-        "fighter2": {"id": -1, "name": special_name, "hp": BOT_HP, "strength": random.randint(10, 30)},
-        "turn": challenger.id,
-        "is_bot_fight": True,
-        "in_progress": True,
-        "message_id": None,
-        "is_special_battle": is_special,
-        "special_hunter": special_name
-    }
-    await pvp_turn(update, context)
-    return PVP_ACTION
-
-async def pvp_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pvp_accept_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    chat_id = query.message.chat_id
-    if chat_id not in FIGHT_STATE or not FIGHT_STATE[chat_id]["in_progress"]:
-        return ConversationHandler.END
-    
-    state = FIGHT_STATE[chat_id]
-    if query.from_user.id != state["fighter2"]["id"]:
+    data = read_data()
+    _, ch_id, tar_id = query.data.split(":")
+    ch_id = int(ch_id); tar_id = int(tar_id)
+    # only targeted user can accept
+    if query.from_user.id != tar_id:
+        await query.answer("Only the challenged user can accept.", show_alert=True)
         return
-        
-    if query.data == "pvp_accept":
-        await query.edit_message_text("Battle accepted! Let's fight!")
-        await pvp_turn(update, context)
-        return PVP_ACTION
-    else:
-        await query.edit_message_text("PvP request declined.")
-        FIGHT_STATE[chat_id]["in_progress"] = False
-        return ConversationHandler.END
+    # create battle
+    battle_id = str(uuid.uuid4())
+    p1 = get_user(data, ch_id) or ensure_user(data, context.bot.get_chat(ch_id))
+    p2 = get_user(data, tar_id) or ensure_user(data, context.bot.get_chat(tar_id))
+    p1_hp = max_hp_for_level(p1["level"])
+    p2_hp = max_hp_for_level(p2["level"])
+    p1_str = base_strength(p1["level"])
+    p2_str = base_strength(p2["level"])
+    battle = {
+        "id": battle_id,
+        "chat_id": query.message.chat_id,
+        "message_id": None,
+        "player1": ch_id,
+        "player2": tar_id,
+        "p1_hp": p1_hp,
+        "p2_hp": p2_hp,
+        "p1_max": p1_hp,
+        "p2_max": p2_hp,
+        "p1_str": p1_str,
+        "p2_str": p2_str,
+        "turn": ch_id,
+        "status": "ongoing",
+        "logs": []
+    }
+    data.setdefault("battles", {})[battle_id] = battle
+    write_data(data)
+    text = battle_text(battle, data)
+    kb = action_kb(battle_id, battle["turn"])
+    msg = await query.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    data = read_data()
+    data["battles"][battle_id]["message_id"] = msg.message_id
+    write_data(data)
 
-async def pvp_turn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    if chat_id not in FIGHT_STATE or not FIGHT_STATE[chat_id]["in_progress"]:
+async def pvp_decline_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Challenge declined.")
+
+def battle_text(battle, data):
+    p1 = get_user(data, battle["player1"])
+    p2 = get_user(data, battle["player2"])
+    p1_name = p1["first_name"] if p1 else f"Player {battle['player1']}"
+    p2_name = p2["first_name"] if p2 else f"Player {battle['player2']}"
+    txt = "🔥 Battle Time! 🔥\n\n"
+    txt += f"{p1_name}\n🌿 Health: {hp_bar(battle['p1_hp'], battle['p1_max'])} {battle['p1_hp']}/{battle['p1_max']}\n"
+    txt += f"✨ strength: {strength_bar(battle['p1_str'])} {battle['p1_str']} 💨\n\n"
+    txt += f"{p2_name}\n🌿 Health: {hp_bar(battle['p2_hp'], battle['p2_max'])} {battle['p2_hp']}/{battle['p2_max']}\n"
+    txt += f"✨ strength: {strength_bar(battle['p2_str'])} {battle['p2_str']} 💨\n\n"
+    current = p1_name if battle["turn"] == battle["player1"] else p2_name
+    txt += f"👉 {current}'s Turn — Choose your action:"
+    return txt
+
+def action_kb(battle_id, user_id):
+    kb = [
+        [InlineKeyboardButton("Attack ⚔️", callback_data=f"act:{battle_id}:attack:{user_id}")],
+        [InlineKeyboardButton("Defend 🛡️", callback_data=f"act:{battle_id}:defend:{user_id}")],
+        [InlineKeyboardButton("Use Item 💊", callback_data=f"act:{battle_id}:useitem:{user_id}")],
+        [InlineKeyboardButton("Use Revival 🌟", callback_data=f"act:{battle_id}:revive:{user_id}")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+async def battle_action_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = read_data()
+    try:
+        _, battle_id, action, uid_str = query.data.split(":")
+    except:
+        await query.answer("Invalid action.", show_alert=True)
         return
-    
-    state = FIGHT_STATE[chat_id]
-    
-    current_player_id = state["fighter1"]["id"] if state["turn"] == state["fighter1"]["id"] else state["fighter2"]["id"]
-    
-    if not state["is_bot_fight"]:
-        if update.effective_user.id != current_player_id:
-            return
-    else:
-        # If it's a bot fight, always process the user's action
-        pass
+    uid = int(uid_str)
+    user = query.from_user
+    if user.id != uid:
+        await query.answer("Not your turn / not allowed.", show_alert=True)
+        return
+    battle = data.get("battles", {}).get(battle_id)
+    if not battle:
+        await query.answer("Battle not found.", show_alert=True)
+        return
+    if battle["status"] != "ongoing":
+        await query.answer("Battle already finished.", show_alert=True)
+        return
+    if battle["turn"] != user.id:
+        await query.answer("It's not your turn.", show_alert=True)
+        return
+    # perform action
+    await perform_action(battle_id, action, user.id, query, context)
 
-    action = update.message.text.lower()
-    
+async def perform_action(battle_id, action, user_id, query, context):
+    data = read_data()
+    battle = data["battles"].get(battle_id)
+    if not battle:
+        await query.answer("Battle missing.", show_alert=True)
+        return
+    attacker_is_p1 = (user_id == battle["player1"])
+    if attacker_is_p1:
+        atk_str = battle["p1_str"]
+        tgt_hp_key = "p2_hp"
+    else:
+        atk_str = battle["p2_str"]
+        tgt_hp_key = "p1_hp"
+    # simplistic implementations of actions
     if action == "attack":
-        damage = random.randint(10, 25)
-        
-        target_hp = state["fighter2"]["hp"] if current_player_id == state["fighter1"]["id"] else state["fighter1"]["hp"]
-        target_hp -= damage
-        
-        if current_player_id == state["fighter1"]["id"]:
-            state["fighter2"]["hp"] = target_hp
-            state["turn"] = state["fighter2"]["id"]
+        dmg = max(1, int(atk_str * 1.2))
+        battle[tgt_hp_key] = max(0, battle[tgt_hp_key] - dmg)
+        battle["logs"].append(f"{user_id} attacked for {dmg}")
+    elif action == "defend":
+        # defend heals a small fraction for simplicity
+        if attacker_is_p1:
+            battle["p1_hp"] = min(battle["p1_max"], battle["p1_hp"] + int(battle["p1_max"] * 0.10))
         else:
-            state["fighter1"]["hp"] = target_hp
-            state["turn"] = state["fighter1"]["id"]
-            
-        # Check for winner
-        if state["fighter1"]["hp"] <= 0 or state["fighter2"]["hp"] <= 0:
-            await pvp_end(update, context)
-            return ConversationHandler.END
-
-        # Update message
-        status_msg = get_battle_status_msg(state)
-        
-        if state["message_id"]:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=state["message_id"],
-                text=status_msg,
-                parse_mode="Markdown"
-            )
+            battle["p2_hp"] = min(battle["p2_max"], battle["p2_hp"] + int(battle["p2_max"] * 0.10))
+        battle["logs"].append(f"{user_id} defended and regained HP")
+    elif action == "useitem":
+        items = user_items(data, user_id)
+        if not items:
+            await query.answer("You have no items to use.", show_alert=True)
+            return
+        # pick first applicable item
+        first = items[0]
+        it = ITEM_INDEX.get(first["item_id"])
+        if it and "damage" in it:
+            dmg = it["damage"]
+            battle[tgt_hp_key] = max(0, battle[tgt_hp_key] - dmg)
+            battle["logs"].append(f"{user_id} used {it['name']} for {dmg} damage")
         else:
-            msg = await update.message.reply_markdown(status_msg)
-            state["message_id"] = msg.message_id
-            
-    return PVP_ACTION
+            battle["logs"].append(f"{user_id} used {it['name']}")
+    elif action == "revive":
+        items = user_items(data, user_id)
+        rev = None
+        for e in items:
+            i = ITEM_INDEX.get(e["item_id"])
+            if i and (i.get("category")=="revival"):
+                rev = (e,i)
+                break
+        if not rev:
+            await query.answer("No revival items found.", show_alert=True)
+            return
+        e,i = rev
+        e["quantity"] = e.get("quantity",1) - 1
+        if e["quantity"] <= 0:
+            data["user_items"][str(user_id)].remove(e)
+        # heal to 50%
+        if attacker_is_p1:
+            battle["p1_hp"] = min(battle["p1_max"], int(battle["p1_max"] * 0.5))
+        else:
+            battle["p2_hp"] = min(battle["p2_max"], int(battle["p2_max"] * 0.5))
+        battle["logs"].append(f"{user_id} used revival {i['name']}")
+    else:
+        await query.answer("Unknown action.", show_alert=True)
+        return
+    # switch turn
+    battle["turn"] = battle["player2"] if attacker_is_p1 else battle["player1"]
+    write_data(data)
+    # update message
+    try:
+        text = battle_text(battle, data)
+        kb = action_kb(battle_id, battle["turn"])
+        await context.bot.edit_message_text(chat_id=battle["chat_id"], message_id=battle["message_id"], text=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.exception("Failed to edit battle message: %s", e)
+    # check victory
+    if battle["p1_hp"] <= 0 or battle["p2_hp"] <= 0:
+        await conclude_battle(battle_id, context)
 
-async def pvp_end(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    state = FIGHT_STATE[chat_id]
-    
-    winner = state["fighter1"] if state["fighter1"]["hp"] > 0 else state["fighter2"]
-    loser = state["fighter1"] if state["fighter1"]["hp"] <= 0 else state["fighter2"]
-    
-    is_pvp_bot = state["is_bot_fight"]
-    
-    if winner["id"] > 0:
-        winner_data = users.get(winner["id"])
-        if winner_data:
-            winner_data["wins"] += 1
-            winner_data["won"] += REWARDS["pvp"]["won"] if not is_pvp_bot else REWARDS["pvp_bot"]["won"]
-            winner_data["xp"] += REWARDS["pvp"]["xp"] if not is_pvp_bot else REWARDS["pvp_bot"]["xp"]
-            winner_data["pvp_points"] += REWARDS["pvp"]["pvp_points"] if not is_pvp_bot else REWARDS["pvp_bot"]["pvp_points"]
-            # Check for rank up
-            winner_data["rank"] = get_rank_from_points(winner_data["pvp_points"])
+async def conclude_battle(battle_id, context):
+    data = read_data()
+    battle = data.get("battles", {}).get(battle_id)
+    if not battle:
+        return
+    if battle["p1_hp"] <= 0:
+        winner_id = battle["player2"]; loser_id = battle["player1"]
+    else:
+        winner_id = battle["player1"]; loser_id = battle["player2"]
+    winner = get_user(data, winner_id); loser = get_user(data, loser_id)
+    cfg = data.get("config", {}).get("pvp_rewards", {})
+    # apply rewards/penalties (as provided)
+    winner["xp"] = winner.get("xp",0) + cfg.get("xp_win",100000)
+    winner["won"] = winner.get("won",0) + cfg.get("won_win",1000000)
+    winner["pvp_points"] = winner.get("pvp_points",0) + cfg.get("pvp_points_win",22)
+    winner["wins"] = winner.get("wins",0) + 1
+    loser["xp"] = loser.get("xp",0) + cfg.get("xp_lose",500)
+    loser["won"] = max(0, loser.get("won",0) + cfg.get("won_lose",-100000))
+    loser["pvp_points"] = max(0, loser.get("pvp_points",0) + cfg.get("pvp_points_lose",-26))
+    loser["losses"] = loser.get("losses",0) + 1
+    battle["status"] = "finished"
+    write_data(data)
+    save_user(data, winner); save_user(data, loser)
+    # final message format as required
+    winner_name = winner["first_name"]
+    loser_name = loser["first_name"]
+    text = (f"🎉 {winner_name} wins the battle! 🏆\n\n"
+            f"👑 Victory Rewards:\n- 🧠 XP: +{cfg.get('xp_win')}\n- 💴 won: +{format_money(cfg.get('won_win'))}\n- 🎖 pvp points: +{cfg.get('pvp_points_win')}\n\n"
+            f"💀 Defeat Penalties for {loser_name}:\n- 🧠 XP: +{cfg.get('xp_lose')}\n- 💴 won: {format_money(cfg.get('won_lose'))}\n- 🎖 pvp points: {cfg.get('pvp_points_lose')}")
+    try:
+        await context.bot.send_message(chat_id=battle["chat_id"], text=text)
+    except Exception as e:
+        logger.exception("Failed to send final battle message: %s", e)
 
-    if loser["id"] > 0:
-        loser_data = users.get(loser["id"])
-        if loser_data:
-            loser_data["losses"] += 1
-            loser_data["won"] -= PENALTIES["pvp"]["won"] if not is_pvp_bot else PENALTIES["pvp_bot"]["won"]
-            loser_data["xp"] += PENALTIES["pvp"]["xp"] if not is_pvp_bot else PENALTIES["pvp_bot"]["xp"]
-            loser_data["pvp_points"] -= PENALTIES["pvp"]["pvp_points"] if not is_pvp_bot else PENALTIES["pvp_bot"]["pvp_points"]
-            # Check for rank up
-            loser_data["rank"] = get_rank_from_points(loser_data["pvp_points"])
-            
-    save_user_data()
-    
-    result_msg = (
-        f"🎉 **{winner['name']}** wins the battle! 🏆\n\n"
-        f"👑 **Victory Rewards**:\n"
-        f"- 🧠 XP: +{REWARDS['pvp']['xp'] if not is_pvp_bot else REWARDS['pvp_bot']['xp']}\n"
-        f"- 💴 won: +{REWARDS['pvp']['won'] if not is_pvp_bot else REWARDS['pvp_bot']['won']}\n"
-        f"- 🎖 pvp points: +{REWARDS['pvp']['pvp_points'] if not is_pvp_bot else REWARDS['pvp_bot']['pvp_points']}\n\n"
-        f"💀 **Defeat Penalties** for **{loser['name']}**:\n"
-        f"- 🧠 XP: +{PENALTIES['pvp']['xp'] if not is_pvp_bot else PENALTIES['pvp_bot']['xp']}\n"
-        f"- 💴 won: -{PENALTIES['pvp']['won'] if not is_pvp_bot else PENALTIES['pvp_bot']['won']}\n"
-        f"- 🎖 pvp points: -{PENALTIES['pvp']['pvp_points'] if not is_pvp_bot else PENALTIES['pvp_bot']['pvp_points']}"
+# ---------------------------
+# PvP vs Bot
+# ---------------------------
+
+@with_data
+async def pvpbot(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    user = update.effective_user
+    u = get_user(data, user.id)
+    if not u:
+        u = ensure_user(data, user)
+    # bot difficulty scales with player's level/rank: simple +2 level
+    bot_level = max(1, u["level"] + 2)
+    bot_hp = max_hp_for_level(bot_level)
+    bot_str = base_strength(bot_level)
+    battle_id = str(uuid.uuid4())
+    battle = {
+        "id": battle_id,
+        "chat_id": update.effective_chat.id,
+        "message_id": None,
+        "player1": user.id,
+        "player2": 0,  # 0 denotes bot
+        "p1_hp": max_hp_for_level(u["level"]),
+        "p2_hp": bot_hp,
+        "p1_max": max_hp_for_level(u["level"]),
+        "p2_max": bot_hp,
+        "p1_str": base_strength(u["level"]),
+        "p2_str": bot_str,
+        "turn": user.id,
+        "status": "ongoing",
+        "is_bot": True,
+        "logs": []
+    }
+    data.setdefault("battles", {})[battle_id] = battle
+    write_data(data)
+    text = battle_text(battle, data)
+    kb = action_kb(battle_id, battle["turn"])
+    msg = await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    data = read_data()
+    data["battles"][battle_id]["message_id"] = msg.message_id
+    write_data(data)
+
+# ---------------------------
+# Currency transfer & leaderboards
+# ---------------------------
+@with_data
+async def wongive(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    if not update.message.reply_to_message or not context.args:
+        await update.message.reply_text("Reply to a user and use: /wongive <amount>")
+        return
+    try:
+        amount = int(context.args[0])
+    except:
+        await update.message.reply_text("Invalid amount.")
+        return
+    giver = update.effective_user
+    receiver = update.message.reply_to_message.from_user
+    g = get_user(data, giver.id)
+    r = get_user(data, receiver.id)
+    if not g:
+        g = ensure_user(data, giver)
+    if not r:
+        r = ensure_user(data, receiver)
+    if g["won"] < amount:
+        await update.message.reply_text("Insufficient won.")
+        return
+    g["won"] -= amount
+    r["won"] += amount
+    save_user(data, g); save_user(data, r)
+    await update.message.reply_text(f"Transferred {format_money(amount)} won to {receiver.first_name}.")
+
+@with_data
+async def tophunters(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    users = list(data.get("users", {}).values())
+    users.sort(key=lambda u: (u.get("pvp_points",0), u.get("level",0)), reverse=True)
+    lines = []
+    for u in users[:10]:
+        lines.append(f"{u.get('first_name')} — Rank: {u.get('rank')} PVP: {u.get('pvp_points')}")
+    await update.message.reply_text("Top Hunters:\n" + ("\n".join(lines) if lines else "No data yet"))
+
+@with_data
+async def globleleader(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    users = list(data.get("users", {}).values())
+    users.sort(key=lambda u: (u.get("level",0), u.get("won",0)), reverse=True)
+    lines = [f"{u.get('first_name')} — Level {u.get('level')} Won: {format_money(u.get('won',0))}" for u in users[:10]]
+    await update.message.reply_text("Global Leaderboard:\n" + ("\n".join(lines) if lines else "No data yet"))
+
+@with_data
+async def localleader(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    # requires local_gc in user profile, show top in this GC
+    chat = update.effective_chat
+    users = [u for u in data.get("users", {}).values() if u.get("local_gc")==chat.id]
+    users.sort(key=lambda u: (u.get("level",0), u.get("won",0)), reverse=True)
+    lines = [f"{u.get('first_name')} — Level {u.get('level')} Won: {format_money(u.get('won',0))}" for u in users[:10]]
+    await update.message.reply_text("Local Leaderboard:\n" + ("\n".join(lines) if lines else "No local data yet"))
+
+# ---------------------------
+# Info & stubs for remaining commands
+# ---------------------------
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "/start — register\n"
+        "/profile — show profile (reply to other's message to view theirs)\n"
+        "/status — strength & progress\n"
+        "/shop — open shop\n"
+        "/buy <item_id> — buy item\n"
+        "/inventory — show your items\n"
+        "/pvp — reply to a user to challenge them (group-only)\n"
+        "/pvpbot — fight the bot\n"
+        "/wongive <amount> — reply to someone and transfer won\n"
+        "/tophunters — top ranks\n"
+        "/globleleader — global leaderboard\n"
+        "/localleader — local leaderboard\n"
+        "/bank /myloan /dailytask /taskreward /title /owner /guide /help\n    "
     )
+    await update.message.reply_text(text)
 
-    await context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=state["message_id"],
-        text=result_msg,
-        parse_mode="Markdown"
-    )
-    
-    FIGHT_STATE[chat_id]["in_progress"] = False
-    return ConversationHandler.END
+async def guide_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Guide: This bot is Solo Leveling themed. Use /shop to buy items, /pvp to fight others in group chats. Boss fights unlock at S-rank milestones (hook-ready).")
 
-def get_battle_status_msg(state):
-    fighter1 = state["fighter1"]
-    fighter2 = state["fighter2"]
+async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Owner: {OWNER_USERNAME}")
 
-    return (
-        f"🔥 **Battle Time!** 🔥\n\n"
-        f"**{fighter1['name']}**\n"
-        f"🌿 **Health**: {get_health_bar(fighter1['hp'])} {fighter1['hp']}/100 🟢\n"
-        f"✨ **Strength**: {get_strength_bar(users.get(fighter1['id'], {}).get('strength', 0))} {users.get(fighter1['id'], {}).get('strength', 0)} 💨\n\n"
-        f"**{fighter2['name']}**\n"
-        f"🌿 **Health**: {get_health_bar(fighter2['hp'])} {fighter2['hp']}/100 🟢\n"
-        f"✨ **Strength**: {get_strength_bar(users.get(fighter2['id'], {}).get('strength', 0))} {users.get(fighter2['id'], {}).get('strength', 0)} 💨\n\n"
-        f"👉 **Turn**: {state['fighter1']['name'] if state['turn'] == state['fighter1']['id'] else state['fighter2']['name']}! Choose your action: Attack"
-    )
+# Stubs: implement later or extend
+@with_data
+async def bank_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Bank: loan offers will be displayed here (coming soon).")
 
-# --- Main function ---
-def main() -> None:
-    application = Application.builder().token(BOT_TOKEN).build()
+@with_data
+async def myloan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("MyLoan: your loans summary will show here (coming soon).")
 
-    # Handlers for basic commands
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("profile", profile))
-    application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("won", won_cmd))
-    application.add_handler(CommandHandler("bank", bank))
-    application.add_handler(CommandHandler("myloan", myloan))
-    application.add_handler(CommandHandler("rank", rank))
-    application.add_handler(CommandHandler("level", level))
-    application.add_handler(CommandHandler("shop", shop))
-    application.add_handler(CommandHandler("buy", buy))
-    application.add_handler(CommandHandler("inventory", inventory))
-    application.add_handler(CommandHandler("swords", swords))
-    application.add_handler(CommandHandler("revivalitem", revivalitem))
-    application.add_handler(CommandHandler("dailytask", dailytask))
-    application.add_handler(CommandHandler("taskreward", taskreward))
-    application.add_handler(CommandHandler("tophunters", tophunters))
-    application.add_handler(CommandHandler("globleleader", globleleader))
-    application.add_handler(CommandHandler("localleader", localleader))
-    application.add_handler(CommandHandler("wongive", wongive))
-    application.add_handler(CommandHandler("title", title))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("guide", guide))
-    application.add_handler(CommandHandler("owner", owner))
+@with_data
+async def rank_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Rank lookup: reply to a user with /rank to see their rank.")
 
-    # Handler for callbacks (buttons)
-    application.add_handler(CallbackQueryHandler(handle_buy_callback, pattern=r"buy_confirm_|\bbuy_cancel\b"))
-    application.add_handler(CallbackQueryHandler(handle_shop_category, pattern=r"shop_"))
-    application.add_handler(CallbackQueryHandler(take_loan, pattern=r"take_loan_"))
+@with_data
+async def level_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Level lookup: reply to a user with /level to see their level.")
 
-    # PvP Conversation Handler
-    pvp_handler = ConversationHandler(
-        entry_points=[CommandHandler("pvp", pvp_start), CommandHandler("pvpbot", pvp_bot_start)],
-        states={
-            START_PVP: [CallbackQueryHandler(pvp_accept, pattern=r"pvp_accept|pvp_decline")],
-            PVP_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, pvp_turn)],
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-    )
-    application.add_handler(pvp_handler)
+@with_data
+async def swards_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Swards: check your swords (use /inventory).")
 
-    application.run_polling()
+@with_data
+async def revivalitem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Revival items: check your revival items (use /inventory).")
+
+@with_data
+async def dailytask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Daily tasks: 3 tasks will be listed here (coming soon).")
+
+@with_data
+async def taskreward_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Task reward: claim your task rewards here (coming soon).")
+
+@with_data
+async def title_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, data):
+    await update.message.reply_text("Titles: Titles for high rankers will be shown here (coming soon).")
+
+# ---------------------------
+# Startup / Register handlers
+# ---------------------------
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # basic commands
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("shop", shop))
+    app.add_handler(CommandHandler("buy", buy))
+    app.add_handler(CommandHandler("inventory", inventory))
+    app.add_handler(CommandHandler("pvp", pvp, filters=filters.ChatType.GROUPS | filters.ChatType.SUPERGROUPS))
+    app.add_handler(CommandHandler("pvpbot", pvpbot))
+    app.add_handler(CommandHandler("wongive", wongive))
+    app.add_handler(CommandHandler("tophunters", tophunters))
+    app.add_handler(CommandHandler("globleleader", globleleader))
+    app.add_handler(CommandHandler("localleader", localleader))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("guide", guide_cmd))
+    app.add_handler(CommandHandler("owner", owner_cmd))
+    # stubs
+    app.add_handler(CommandHandler("bank", bank_cmd))
+    app.add_handler(CommandHandler("myloan", myloan_cmd))
+    app.add_handler(CommandHandler("rank", rank_cmd))
+    app.add_handler(CommandHandler("level", level_cmd))
+    app.add_handler(CommandHandler("swards", swards_cmd))
+    app.add_handler(CommandHandler("revivalitem", revivalitem_cmd))
+    app.add_handler(CommandHandler("dailytask", dailytask_cmd))
+    app.add_handler(CommandHandler("taskreward", taskreward_cmd))
+    app.add_handler(CommandHandler("title", title_cmd))
+
+    # callback handlers
+    app.add_handler(CallbackQueryHandler(shop_callback, pattern=r"^shop:"))
+    app.add_handler(CallbackQueryHandler(buy_confirm_cb, pattern=r"^buy_confirm:"))
+    app.add_handler(CallbackQueryHandler(buy_cancel_cb, pattern=r"^buy_cancel"))
+    app.add_handler(CallbackQueryHandler(pvp_accept_cb, pattern=r"^pvp_accept:"))
+    app.add_handler(CallbackQueryHandler(pvp_decline_cb, pattern=r"^pvp_decline:"))
+    app.add_handler(CallbackQueryHandler(battle_action_cb, pattern=r"^act:"))
+
+    logger.info("Bot starting...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
