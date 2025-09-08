@@ -1,5 +1,5 @@
 python-telegram-bot==20.6
-apscheduler==3.10.6
+apscheduler==3.11.0
 Pillow==10.0.1
 psycopg2-binary==2.9.7
 requests==2.31.0
