@@ -21,8 +21,8 @@ from threading import Lock
 from dotenv import load_dotenv
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-)
+    Update, InlineKeyboardButton, InlineKeyboardMarkup)
+from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes, MessageHandler, filters
