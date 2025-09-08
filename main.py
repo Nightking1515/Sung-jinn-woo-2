@@ -32,7 +32,7 @@ from telegram.ext import (
 # Configuration & Constants
 # ---------------------------
 load_dotenv()
-BOT_TOKEN = os.getenv("8050711631:AAEOmQtI1LDg8F5zBST1tIPh0mDtHbIISEs")
+BOT_TOKEN ="8050711631:AAEOmQtI1LDg8F5zBST1tIPh0mDtHbIISEs"
 OWNER_USERNAME = os.getenv("OWNER_USERNAME", "@Nightking1515")
 DATA_FILE = os.getenv("DATA_FILE", "users.json")
 # If you later want a separate shop file, change here. For now shop is embedded.
