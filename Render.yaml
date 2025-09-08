@@ -1,15 +1,10 @@
-# render.yaml
 services:
-  - type: web
+  - type: worker
     name: solo-leveling-bot
     env: python
-    buildCommand: "pip install -r requirements.txt"
+    plan: free
+    buildCommand: ""
     startCommand: "python main.py"
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: DATABASE_PATH
-        value: "/data/users.json"
-    disk:
-      name: bot-data
-      mountPath: /data
