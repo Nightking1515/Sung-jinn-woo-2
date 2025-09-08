@@ -3,6 +3,7 @@ import sqlite3
 import random
 import os 
 from datetime import datetime
+from threading import Lock
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
