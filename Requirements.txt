@@ -1,4 +1,1 @@
-python-telegram-bot>=20.0
-apscheduler
-Pillow
-psycopg2-binary
+python-telegram-bot==20.6
